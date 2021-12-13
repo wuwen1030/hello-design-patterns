@@ -3,88 +3,134 @@
 /*:
  > [https://refactoring.guru/design-patterns/decorator](https://refactoring.guru/design-patterns/decorator)
  
- ![UML](https://refactoring.guru/images/patterns/diagrams/decorator/example-2x.png?id=4891323a27d5601a174e)
+ ![UML](Decorator.png)
  */
 
-import Foundation
+import UIKit
+import CoreImage
 
-protocol DataSource {
-    func write(data: Data?)
-    func read() -> Data?
+protocol ImageEditor {
+    func apply() -> UIImage
 }
 
-class FileDataSource: DataSource {
-    let fileName: String
-    
-    init(fileName: String) {
-        self.fileName = fileName
-    }
-    
-    func write(data: Data?) {
-        print("Write data into file: \(fileName)")
-    }
-    
-    func read() -> Data? {
-        print("Read data from file: \(fileName)")
-        return nil
+extension UIImage: ImageEditor {
+    func apply() -> UIImage {
+        return self
     }
 }
 
-class DataSourceDecorator: DataSource {
-    let wrapee: DataSource
+class ImageDecorator: ImageEditor {
+    var editor: ImageEditor
     
-    init(dataSource: DataSource) {
-        wrapee = dataSource
+    required  init(editor: ImageEditor) {
+        self.editor = editor
     }
     
-    func write(data: Data?) {
-        wrapee.write(data: data)
-    }
-    
-    func read() -> Data? {
-        return wrapee.read()
+    func apply() -> UIImage {
+        return editor.apply()
     }
 }
 
-class EncryptionDecorator: DataSourceDecorator {
-    override func write(data: Data?) {
-        print("Encrypt data before writing")
-        super.write(data: data)
+class BaseFilter: ImageDecorator {
+    var filter: CIFilter?
+    
+    init(editor: ImageEditor, filterName: String) {
+        self.filter = CIFilter(name: filterName)
+        super.init(editor: editor)
     }
     
-    override func read() -> Data? {
-        let data = super.read()
-        print("Decrypt data after read")
-        return data
+    required init(editor: ImageEditor) {
+        super.init(editor: editor)
+    }
+    
+    override func apply() -> UIImage {
+        let image = super.apply()
+        let context = CIContext(options: nil)
+        
+        filter?.setValue(CIImage(image: image), forKey: kCIInputImageKey)
+        
+        guard let output = filter?.outputImage else { return image }
+        guard let coreImage = context.createCGImage(output, from: output.extent) else {
+            return image
+        }
+        return UIImage(cgImage: coreImage)
     }
 }
 
-class CompressionDecorator: DataSourceDecorator {
-    override func write(data: Data?) {
-        print("Compress data before writing")
-        super.write(data: data)
+class BlurFilter: BaseFilter {
+    required init(editor: ImageEditor) {
+        super.init(editor: editor, filterName: "CIGaussianBlur")
     }
     
-    override func read() -> Data? {
-        let data = super.read()
-        print("Decompress data after read")
-        return data
+    func update(radius: Double) {
+        filter?.setValue(radius, forKey: "inputRadius")
     }
 }
 
+class ColorFilter: BaseFilter {
+    required init(editor: ImageEditor) {
+        super.init(editor: editor, filterName: "CIColorControls")
+    }
+    
+    func update(saturation: Double) {
+        filter?.setValue(saturation, forKey: "inputSaturation")
+    }
+    
+    func update(brightness: Double) {
+        filter?.setValue(brightness, forKey: "inputBrightness")
+    }
+    
+    func update(contrast: Double) {
+        filter?.setValue(contrast, forKey: "inputContrast")
+    }
+}
 
-var dataSource: DataSource = FileDataSource(fileName: "demo.dat")
-let data = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.".data(using: .utf8)
+class Resizer: ImageDecorator {
+    private var xScale: CGFloat = 0
+    private var yScale: CGFloat = 0
+    private var hasAlpha = false
+    
+    convenience init(editor: ImageEditor, xScale: CGFloat = 0, yScale: CGFloat = 0, hasAlpha: Bool = false) {
+        self.init(editor: editor)
+        self.xScale = xScale
+        self.yScale = yScale
+        self.hasAlpha = hasAlpha
+    }
 
-// write data to file
-dataSource.write(data: data)
+    required init(editor: ImageEditor) {
+        super.init(editor: editor)
+    }
+    
+    override func apply() -> UIImage {
+        let image = super.apply()
+        
+        let size = image.size.applying(CGAffineTransform(scaleX: xScale, y: yScale))
+        
+        UIGraphicsBeginImageContextWithOptions(size, !hasAlpha, UIScreen.main.scale)
+        image.draw(in: CGRect(origin: .zero, size: size))
+        
+        let scaledImage = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        
+        return scaledImage ?? image
+    }
+}
 
-dataSource = EncryptionDecorator(dataSource: dataSource)
-// encrypt data -> write data into file
-dataSource.write(data: data)
+// Application
+let urlString = "https://refactoring.guru/images/content-public/logos/logo-new-3x.png"
+let data = try? Data(contentsOf: URL(string: urlString)!)
+let image = UIImage(data: data!)!
+let resizer = Resizer(editor: image, xScale: 0.2, yScale: 0.2)
 
-dataSource = CompressionDecorator(dataSource: dataSource)
-// compress data -> encrypt data -> write data into file
-dataSource.write(data: data)
+let blurFilter = BlurFilter(editor: resizer)
+blurFilter.update(radius: 2)
+
+let colorFilter = ColorFilter(editor: blurFilter)
+colorFilter.update(contrast: 0.53)
+colorFilter.update(brightness: 0.12)
+colorFilter.update(saturation: 4)
+
+let outputImage = colorFilter.apply()
+
 
 //: [Next](@next)
